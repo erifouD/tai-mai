@@ -1,44 +1,113 @@
+import os
+import pandas as pd
 import tensorflow as tf
-from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import Conv2D, MaxPooling2D, Flatten, Dense
-import h5py
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import LabelEncoder
+from tensorflow.keras.models import Model
+from tensorflow.keras.layers import Input, Conv2D, MaxPooling2D, Flatten, Dense, Dropout, BatchNormalization
+from tensorflow.keras.callbacks import ModelCheckpoint, EarlyStopping
 
-def build_model():
-    model = Sequential([
-        Conv2D(32, (3, 3), activation='relu', input_shape=(28, 28, 1)),
-        MaxPooling2D((2, 2)),
-        Conv2D(64, (3, 3), activation='relu'),
-        MaxPooling2D((2, 2)),
-        Flatten(),
-        Dense(128, activation='relu'),
-        Dense(10, activation='softmax')
-    ])
+def build_multi_output_model(input_shape=(224, 224, 3), num_types=3, num_models=8):
+    inputs = Input(shape=input_shape, name='image_input')
     
-    model.compile(optimizer='adam',
-                  loss='sparse_categorical_crossentropy',
-                  metrics=['accuracy'])
+    # Общая сверточная база (Feature Extractor)
+    x = Conv2D(32, (3, 3), activation='relu', padding='same')(inputs)
+    x = BatchNormalization()(x)
+    x = MaxPooling2D((2, 2))(x)
+    
+    x = Conv2D(64, (3, 3), activation='relu', padding='same')(x)
+    x = BatchNormalization()(x)
+    x = MaxPooling2D((2, 2))(x)
+    
+    x = Conv2D(128, (3, 3), activation='relu', padding='same')(x)
+    x = BatchNormalization()(x)
+    x = MaxPooling2D((2, 2))(x)
+    
+    x = Flatten()(x)
+    x = Dense(256, activation='relu')(x)
+    shared_features = Dropout(0.5)(x)
+    
+    # Выход 1: Тип самолета
+    type_dense = Dense(64, activation='relu')(shared_features)
+    type_output = Dense(num_types, activation='softmax', name='type_output')(type_dense)
+    
+    # Выход 2: Конкретная Модель
+    model_dense = Dense(128, activation='relu')(shared_features)
+    model_output = Dense(num_models, activation='softmax', name='model_output')(model_dense)
+    
+    model = Model(inputs=inputs, outputs=[type_output, model_output], name="Aircraft_MultiOutput_CNN")
+    
+    model.compile(
+        optimizer='adam',
+        loss={
+            'type_output': 'sparse_categorical_crossentropy',
+            'model_output': 'sparse_categorical_crossentropy'
+        },
+        loss_weights={'type_output': 1.0, 'model_output': 1.0},
+        metrics={'type_output': ['accuracy'], 'model_output': ['accuracy']}
+    )
     return model
 
-def main():
-    print("Loading FashionMNIST dataset...")
-    fashion_mnist = tf.keras.datasets.fashion_mnist
-    (x_train, y_train), (x_test, y_test) = fashion_mnist.load_data()
-    
-    # Normalization
-    x_train = x_train.reshape(-1, 28, 28, 1).astype('float32') / 255.0
-    x_test = x_test.reshape(-1, 28, 28, 1).astype('float32') / 255.0
-    
-    print("Building lighter CNN model for faster CPU training...")
-    model = build_model()
-    model.summary()
-    
-    print("Training model (target accuracy > 95%)...")
-    # Using 10 epochs for faster training on CPU while reaching 95%+ train accuracy
-    history = model.fit(x_train, y_train, epochs=10, batch_size=64, validation_data=(x_test, y_test))
-    
-    print("\nSaving trained model to model.h5 (uses h5py)...")
-    model.save('model.h5')
-    print("Done!")
+# Функция для загрузки и аугментации изображений
+def load_image_and_labels(image_path, type_label, model_label):
+    img = tf.io.read_file(image_path)
+    img = tf.image.decode_jpeg(img, channels=3)
+    img = tf.image.resize(img, [224, 224])
+    img = img / 255.0 # Нормализация пикселей [0, 1]
+    return img, {'type_output': type_label, 'model_output': model_label}
 
-if __name__ == '__main__':
+def main():
+    print("Инициализация пайплайна обучения нейросети...\n")
+    if not os.path.exists('dataset_metadata.csv'):
+        print("Ошибка: dataset_metadata.csv не найден.")
+        return
+
+    df = pd.read_csv('dataset_metadata.csv')
+    num_types = len(df['type_label'].unique())
+    print(f"Всего изображений: {len(df)}")
+    
+    # Автоматическая кодировка текстовыех названий моделей в числа
+    model_encoder = LabelEncoder()
+    df['model_encoded'] = model_encoder.fit_transform(df['model_label'])
+    num_models = len(model_encoder.classes_)
+    
+    # Сохраняем маппинг в файл, чтобы веб-интерфейс знал, под каким ID какая модель
+    classes_df = pd.DataFrame({'Model': model_encoder.classes_, 'ID': range(num_models)})
+    classes_df.to_csv('classes_mapping.csv', index=False)
+    
+    # Разбиваем данные на обучающую и проверочную выборки (80% / 20%)
+    train_df, val_df = train_test_split(df, test_size=0.2, random_state=42)
+    print(f"Обучающая выборка: {len(train_df)}, Валидационная выборка: {len(val_df)}")
+    
+    # Создаем быстрый tf.data.Dataset пайплайн
+    def df_to_dataset(dataframe, batch_size=32):
+        paths = dataframe['image_path'].values
+        type_labels = dataframe['type_label'].values
+        model_labels = dataframe['model_encoded'].values
+        
+        ds = tf.data.Dataset.from_tensor_slices((paths, type_labels, model_labels))
+        ds = ds.map(load_image_and_labels, num_parallel_calls=tf.data.AUTOTUNE)
+        ds = ds.shuffle(buffer_size=len(dataframe)).batch(batch_size).prefetch(tf.data.AUTOTUNE)
+        return ds
+        
+    train_ds = df_to_dataset(train_df, batch_size=32)
+    val_ds = df_to_dataset(val_df, batch_size=32)
+    
+    model = build_multi_output_model(num_types=num_types, num_models=num_models)
+    
+    # Коллбэки: Сохранять модель только если она улучшилась на валидации
+    checkpoint = ModelCheckpoint('aircraft_multi_model.h5', monitor='val_loss', save_best_only=True, verbose=1)
+    early_stop = EarlyStopping(monitor='val_loss', patience=5, restore_best_weights=True)
+    
+    print("\nСтарт обучения.")
+    history = model.fit(
+        train_ds,
+        validation_data=val_ds,
+        epochs=30,  # 30 эпох с ранней остановкой
+        callbacks=[checkpoint, early_stop]
+    )
+    
+    print("\nОбучение завершено.")
+
+if __name__ == "__main__":
     main()
