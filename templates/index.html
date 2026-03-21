@@ -1,67 +1,59 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="ru">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>FashionMNIST CNN Classifier</title>
+    <title>AeroScan OSINT Radar</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
-    <!-- Load Google Fonts -->
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 </head>
 <body>
-    <div class="container">
-        <header>
-            <h1>FashionMNIST CNN Classifier</h1>
-            <p>Predict clothing types using a Convolutional Neural Network trained in Keras.</p>
+    <div class="radar-container">
+        <header class="scan-header">
+            <h1>[AEROSCAN] АВТОМАТИЧЕСКАЯ ИДЕНТИФИКАЦИЯ ВОЗДУШНЫХ СУДОВ</h1>
+            <p>Система оптической верификации на базе сверточной нейросети (Multi-Output CNN)</p>
         </header>
-
-        <main class="main-content">
-            <!-- Image Selection -->
-            <section class="card upload-section">
-                <h2>1. Select an Image</h2>
-                <div class="actions">
-                    <button id="btn-random" class="btn btn-secondary">Get Random Test Image</button>
-                    <span class="divider">OR</span>
-                    <label for="file-upload" class="btn btn-primary custom-file-upload">
-                        Upload Image
-                    </label>
-                    <input id="file-upload" type="file" accept="image/*" />
+        
+        <div class="main-panels">
+            <!-- Левая панель ввожа -->
+            <div class="panel upload-panel">
+                <h2>> Оптический ввод</h2>
+                <div class="image-box" id="drop-zone">
+                    <img id="preview" src="" style="display:none;"/>
+                    <span id="placeholder">НАВЕДИТЕ ОБЪЕКТИВ<br>(ЗАГРУЗИТЕ ФОТО)</span>
+                    <input type="file" id="file-input" accept="image/*" style="display:none;">
                 </div>
-                <div class="image-preview-container">
-                    <img id="image-preview" src="" alt="Selected Image" style="display: none;" />
-                    <div id="image-placeholder">No image selected</div>
+                <button id="upload-btn" class="neon-btn">ВЫУДИТЬ ДАННЫЕ С РАДАРА (ФАЙЛ)</button>
+                <button id="scan-btn" class="neon-btn pulse" disabled>ИНИЦИАЛИЗАЦИЯ СКАНЕРА</button>
+            </div>
+            
+            <!-- Правая панель вывода данных -->
+            <div class="panel data-panel">
+                <h2>> Телеметрия нейросети</h2>
+                <div id="loading" class="terminal-text" style="display:none;">
+                    Выполнение сверточного анализа тензоров...<br>
+                    > Слой 1: Извлечение признаков... OK<br>
+                    > Слой 2: Разделение графа... OK<br>
+                    > Слой 3: Softmax классификация...
                 </div>
-                <p id="true-label" class="info-text"></p>
-            </section>
-
-            <!-- Prediction results -->
-            <section class="card prediction-section">
-                <h2>2. Analyze Image</h2>
-                <button id="btn-predict" class="btn btn-primary" disabled>Predict Class</button>
                 
-                <div id="loading" class="loading" style="display: none;">
-                    <div class="spinner"></div>
-                    <p>Analyzing with CNN...</p>
-                </div>
-
-                <div id="result-container" class="result-container" style="display: none;">
-                    <h3>Prediction:</h3>
-                    <div class="prediction-highlight">
-                        <span id="pred-class">T-Shirt</span>
-                        <span id="pred-conf" class="confidence-badge">98.5%</span>
+                <div id="results" style="display:none;">
+                    <div class="result-block">
+                        <h3>КЛАСС ВОЗДУШНОГО СУДНА (БАЗОВЫЙ ТИП):</h3>
+                        <div class="data-value" id="type-result">ОЖИДАНИЕ...</div>
+                        <div class="conf-bar-container"><div class="conf-bar" id="type-bar"></div></div>
+                        <div class="conf-text">КОЭФФИЦИЕНТ УВЕРЕННОСТИ: <span id="type-conf">0%</span></div>
                     </div>
                     
-                    <h4>Probabilities:</h4>
-                    <div id="probabilities-bars" class="bars-container">
-                        <!-- Bars will be inserted here -->
+                    <div class="result-block">
+                        <h3>ТОЧНАЯ ИДЕНТИФИКАЦИЯ (МАКРА/МОДЕЛЬ):</h3>
+                        <div class="data-value" id="model-result">ОЖИДАНИЕ...</div>
+                        <div class="conf-bar-container"><div class="conf-bar" id="model-bar"></div></div>
+                        <div class="conf-text">КОЭФФИЦИЕНТ УВЕРЕННОСТИ: <span id="model-conf">0%</span></div>
                     </div>
                 </div>
-                
-                <div id="error-message" class="error-message" style="display: none;"></div>
-            </section>
-        </main>
+            </div>
+        </div>
     </div>
-
     <script src="{{ url_for('static', filename='main.js') }}"></script>
 </body>
 </html>

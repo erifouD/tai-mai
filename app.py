@@ -1,7 +1,5 @@
 import os
-import io
-import base64
-import random
+import pandas as pd
 import numpy as np
 from flask import Flask, request, jsonify, render_template
 import tensorflow as tf
@@ -9,83 +7,89 @@ from PIL import Image
 
 app = Flask(__name__)
 
-# Load model
-try:
-    model = tf.keras.models.load_model('model.h5')
-    print("Model loaded successfully.")
-except Exception as e:
-    print(f"Error loading model: {e}")
-    model = None
+MODEL_PATH = 'aircraft_multi_model.h5'
+MAPPING_PATH = 'classes_mapping.csv'
 
-# Class names for FashionMNIST
-CLASS_NAMES = ['T-shirt/top', 'Trouser', 'Pullover', 'Dress', 'Coat',
-               'Sandal', 'Shirt', 'Sneaker', 'Bag', 'Ankle boot']
+# Глобальные переменные для хранения модели и словаря классов
+model = None
+MODEL_CLASSES = {0: "Pending Mapping..."}
+TYPE_CLASSES = {0: "Гражданский пассажирский", 1: "Военный истребитель", 2: "Военно-транспортный"}
 
-# Load test dataset for the random image feature
-(_, _), (x_test, y_test) = tf.keras.datasets.fashion_mnist.load_data()
+def load_resources():
+    global model, MODEL_CLASSES
+    # Загрузка модели
+    if model is None and os.path.exists(MODEL_PATH):
+        try:
+            model = tf.keras.models.load_model(MODEL_PATH)
+            print("Модель успешно загружена.")
+        except Exception as e:
+            print(f"Ошибка при загрузке модели: {e}")
+            
+    # Загрузка словаря моделей
+    if list(MODEL_CLASSES.values())[0] == "Pending Mapping..." and os.path.exists(MAPPING_PATH):
+        try:
+            mapping_df = pd.read_csv(MAPPING_PATH)
+            MODEL_CLASSES = dict(zip(mapping_df['ID'], mapping_df['Model']))
+            print("Маппинг классов загружен.")
+        except Exception as e:
+            print(f"Ошибка при загрузке маппинга: {e}")
+
+# Попытка загрузить при старте
+load_resources()
 
 @app.route('/')
 def index():
     return render_template('index.html')
 
-@app.route('/get_random_image', methods=['GET'])
-def get_random_image():
-    idx = random.randint(0, len(x_test) - 1)
-    img_array = x_test[idx]
-    label = CLASS_NAMES[y_test[idx]]
-    
-    # Convert to PIL Image
-    img = Image.fromarray(img_array)
-    
-    # Convert to base64
-    buffered = io.BytesIO()
-    img.save(buffered, format="PNG")
-    img_str = base64.b64encode(buffered.getvalue()).decode('utf-8')
-    
-    return jsonify({
-        'image': f'data:image/png;base64,{img_str}',
-        'label': label,
-        'index': idx
-    })
-
 @app.route('/predict', methods=['POST'])
 def predict():
+    # Попробуем загрузить ресурсы, если они появились (пользователь скачал их на сервер)
+    load_resources()
+
     if model is None:
-        return jsonify({'error': 'Model not loaded'}), 500
+        return jsonify({'error': 'Модель еще не загружена на сервер. Пожалуйста, поместите aircraft_multi_model.h5 в корневую директорию.'}), 503
         
     if 'file' not in request.files:
-        return jsonify({'error': 'No file part'}), 400
+        return jsonify({'error': 'Файл не найден'}), 400
         
     file = request.files['file']
     if file.filename == '':
-        return jsonify({'error': 'No selected file'}), 400
+        return jsonify({'error': 'Файл не выбран'}), 400
 
     try:
-        # Read image
-        img = Image.open(file.stream).convert('L') # Convert to grayscale
-        img = img.resize((28, 28)) # Resize to 28x28
+        # Открываем изображение и подготавливаем для сети
+        img = Image.open(file.stream).convert('RGB')
+        img = img.resize((224, 224))
         
-        # Preprocess
-        img_array = np.array(img)
-        # If the image has white background (meaning > 127 mean), invert it since FashionMNIST is black background
-        if np.mean(img_array) > 127:
-            img_array = 255 - img_array
-            
-        img_array = img_array.astype('float32') / 255.0
-        img_array = img_array.reshape(1, 28, 28, 1)
+        img_array = np.array(img).astype('float32') / 255.0
+        img_array = np.expand_dims(img_array, axis=0) # Формат (1, 224, 224, 3)
         
-        # Predict
-        prediction = model.predict(img_array)
-        class_idx = int(np.argmax(prediction[0]))
-        confidence = float(np.max(prediction[0]))
+        # Инференс
+        predictions = model.predict(img_array)
+        
+        # predictions - это список из двух выходов [type_output, model_output]
+        type_preds = predictions[0][0]
+        model_preds = predictions[1][0]
+        
+        top_type_idx = int(np.argmax(type_preds))
+        top_type_conf = float(type_preds[top_type_idx])
+        
+        top_model_idx = int(np.argmax(model_preds))
+        top_model_conf = float(model_preds[top_model_idx])
         
         return jsonify({
-            'class': CLASS_NAMES[class_idx],
-            'confidence': f'{confidence*100:.2f}%',
-            'probabilities': {CLASS_NAMES[i]: float(prediction[0][i]) for i in range(10)}
+            'type': {
+                'class': TYPE_CLASSES.get(top_type_idx, f"Type {top_type_idx}"),
+                'confidence': f'{top_type_conf*100:.1f}%'
+            },
+            'model': {
+                'class': MODEL_CLASSES.get(top_model_idx, f"Model {top_model_idx}"),
+                'confidence': f'{top_model_conf*100:.1f}%'
+            }
         })
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
-    app.run(debug=True, port=5000)
+    # Локальный запуск. В production (в Docker) Flask будет запущен через Gunicorn
+    app.run(host='0.0.0.0', port=5000)
