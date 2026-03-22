@@ -93,7 +93,13 @@ def main():
     train_ds = df_to_dataset(train_df, batch_size=32)
     val_ds = df_to_dataset(val_df, batch_size=32)
     
-    model = build_multi_output_model(num_types=num_types, num_models=num_models)
+    model_path = 'aircraft_multi_model.h5'
+    if os.path.exists(model_path):
+        print(f"\n[INFO] Найден файл {model_path}! Загружаем его для ПРОДОЛЖЕНИЯ обучения (дообучение)...")
+        model = tf.keras.models.load_model(model_path)
+    else:
+        print("\n[INFO] Сохраненной модели не найдено. Создаем новую с нуля...")
+        model = build_multi_output_model(num_types=num_types, num_models=num_models)
     
     # Коллбэки: Сохранять модель только если она улучшилась на валидации
     checkpoint = ModelCheckpoint('aircraft_multi_model.h5', monitor='val_loss', save_best_only=True, verbose=1)
