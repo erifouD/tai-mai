@@ -4,26 +4,21 @@ import tensorflow as tf
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import LabelEncoder
 from tensorflow.keras.models import Model
-from tensorflow.keras.layers import Input, Conv2D, MaxPooling2D, Flatten, Dense, Dropout, BatchNormalization
+from tensorflow.keras.layers import Input, Conv2D, MaxPooling2D, Flatten, Dense, Dropout, BatchNormalization, GlobalAveragePooling2D
 from tensorflow.keras.callbacks import ModelCheckpoint, EarlyStopping
+from tensorflow.keras.applications import MobileNetV2
 
 def build_multi_output_model(input_shape=(224, 224, 3), num_types=3, num_models=8):
     inputs = Input(shape=input_shape, name='image_input')
     
-    # Общая сверточная база (Feature Extractor)
-    x = Conv2D(32, (3, 3), activation='relu', padding='same')(inputs)
-    x = BatchNormalization()(x)
-    x = MaxPooling2D((2, 2))(x)
+    # Базовая предобученная модель (Transfer Learning)
+    base_model = MobileNetV2(weights='imagenet', include_top=False, input_tensor=inputs)
     
-    x = Conv2D(64, (3, 3), activation='relu', padding='same')(x)
-    x = BatchNormalization()(x)
-    x = MaxPooling2D((2, 2))(x)
+    # Замораживаем базовые слои, чтобы не сломать их "умные" веса на начальном этапе
+    base_model.trainable = False 
     
-    x = Conv2D(128, (3, 3), activation='relu', padding='same')(x)
-    x = BatchNormalization()(x)
-    x = MaxPooling2D((2, 2))(x)
-    
-    x = Flatten()(x)
+    x = base_model.output
+    x = GlobalAveragePooling2D()(x) # Преобразуем многомерные признаки в плоский вектор
     x = Dense(256, activation='relu')(x)
     shared_features = Dropout(0.5)(x)
     
@@ -35,7 +30,7 @@ def build_multi_output_model(input_shape=(224, 224, 3), num_types=3, num_models=
     model_dense = Dense(128, activation='relu')(shared_features)
     model_output = Dense(num_models, activation='softmax', name='model_output')(model_dense)
     
-    model = Model(inputs=inputs, outputs=[type_output, model_output], name="Aircraft_MultiOutput_CNN")
+    model = Model(inputs=inputs, outputs=[type_output, model_output], name="Aircraft_MultiOutput_MobileNet")
     
     model.compile(
         optimizer='adam',
@@ -53,7 +48,8 @@ def load_image_and_labels(image_path, type_label, model_label):
     img = tf.io.read_file(image_path)
     img = tf.image.decode_jpeg(img, channels=3)
     img = tf.image.resize(img, [224, 224])
-    img = img / 255.0 # Нормализация пикселей [0, 1]
+    # MobileNetV2 ожидает специальную нормализацию пикселей [-1, 1], а не просто [0, 1]
+    img = tf.keras.applications.mobilenet_v2.preprocess_input(img)
     return img, {'type_output': type_label, 'model_output': model_label}
 
 def main():
@@ -93,7 +89,9 @@ def main():
     train_ds = df_to_dataset(train_df, batch_size=32)
     val_ds = df_to_dataset(val_df, batch_size=32)
     
-    model_path = 'aircraft_multi_model.h5'
+    # Мы изменили имя файла сохранения, чтобы скрипт начал строить НОВУЮ сеть MobileNet, 
+    # а не подцепил старую простую CNN сеть, которая уже есть в папке.
+    model_path = 'aircraft_multi_model_mobilenet.h5'
     if os.path.exists(model_path):
         print(f"\n[INFO] Найден файл {model_path}! Загружаем его для ПРОДОЛЖЕНИЯ обучения (дообучение)...")
         model = tf.keras.models.load_model(model_path)
@@ -102,7 +100,7 @@ def main():
         model = build_multi_output_model(num_types=num_types, num_models=num_models)
     
     # Коллбэки: Сохранять модель только если она улучшилась на валидации
-    checkpoint = ModelCheckpoint('aircraft_multi_model.h5', monitor='val_loss', save_best_only=True, verbose=1)
+    checkpoint = ModelCheckpoint('aircraft_multi_model_mobilenet.h5', monitor='val_loss', save_best_only=True, verbose=1)
     early_stop = EarlyStopping(monitor='val_loss', patience=5, restore_best_weights=True)
     
     print("\nСтарт обучения.")

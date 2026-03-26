@@ -5,10 +5,9 @@ services:
     build: .
     container_name: aviation_classifier
     ports:
-      - "127.0.0.1:5000:5000" # Проброс только на localhost для Reverse Proxy (Nginx)
+      - "127.0.0.1:5000:5000"
     volumes:
       # Пробрасываем обученную модель и маппинг в запущенный контейнер
-      # Это позволяет обновлять модель без пересборки Docker-образа!
-      - ./aircraft_multi_model.h5:/app/aircraft_multi_model.h5
+
       - ./classes_mapping.csv:/app/classes_mapping.csv
     restart: unless-stopped

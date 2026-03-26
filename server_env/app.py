@@ -7,7 +7,7 @@ from PIL import Image
 
 app = Flask(__name__)
 
-MODEL_PATH = 'aircraft_multi_model.h5'
+MODEL_PATH = 'aircraft_multi_model.keras'
 MAPPING_PATH = 'classes_mapping.csv'
 
 # Глобальные переменные для хранения модели и словаря классов
@@ -20,10 +20,31 @@ def load_resources():
     # Загрузка модели
     if model is None and os.path.exists(MODEL_PATH):
         try:
-            model = tf.keras.models.load_model(MODEL_PATH)
+            # Патч: переопределяем Dense и InputLayer чтобы они игнорировали
+            # неизвестные аргументы из новых версий Keras (quantization_config, batch_shape)
+            OriginalDense = tf.keras.layers.Dense
+            OriginalInputLayer = tf.keras.layers.InputLayer
+
+            class PatchedDense(OriginalDense):
+                def __init__(self, *args, **kwargs):
+                    kwargs.pop('quantization_config', None)
+                    super().__init__(*args, **kwargs)
+
+            class PatchedInputLayer(OriginalInputLayer):
+                def __init__(self, *args, **kwargs):
+                    kwargs.pop('optional', None)
+                    if 'batch_shape' in kwargs:
+                        kwargs['input_shape'] = kwargs.pop('batch_shape')[1:]
+                    super().__init__(*args, **kwargs)
+
+            model = tf.keras.models.load_model(
+                MODEL_PATH,
+                custom_objects={'Dense': PatchedDense, 'InputLayer': PatchedInputLayer}
+            )
             print("Модель успешно загружена.")
         except Exception as e:
             print(f"Ошибка при загрузке модели: {e}")
+
             
     # Загрузка словаря моделей
     if list(MODEL_CLASSES.values())[0] == "Pending Mapping..." and os.path.exists(MAPPING_PATH):
@@ -43,7 +64,7 @@ def index():
 
 @app.route('/predict', methods=['POST'])
 def predict():
-    # Попробуем загрузить ресурсы, если они появились (пользователь скачал их на сервер)
+    # Попробуем загрузить ресурсы
     load_resources()
 
     if model is None:
@@ -61,7 +82,9 @@ def predict():
         img = Image.open(file.stream).convert('RGB')
         img = img.resize((224, 224))
         
-        img_array = np.array(img).astype('float32') / 255.0
+        img_array = np.array(img).astype('float32')
+        # MobileNetV2 ожидает специальную нормализацию пикселей [-1, 1]
+        img_array = tf.keras.applications.mobilenet_v2.preprocess_input(img_array)
         img_array = np.expand_dims(img_array, axis=0) # Формат (1, 224, 224, 3)
         
         # Инференс
